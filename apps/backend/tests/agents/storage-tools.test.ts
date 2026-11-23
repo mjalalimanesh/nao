@@ -253,6 +253,17 @@ describe('list', () => {
 });
 
 describe('search', () => {
+	it('shows a working relative glob when an absolute pattern is rejected', async () => {
+		const docsFolder = path.join(projectFolder, 'docs', 'guide');
+		await fs.mkdir(docsFolder, { recursive: true });
+		await fs.writeFile(path.join(docsFolder, 'setup.md'), '# Setup');
+
+		await expect(run(searchTool, { pattern: 'docs/**/*.md' })).resolves.toMatchObject({
+			files: [{ path: '/docs/guide/setup.md' }],
+		});
+		await expect(run(searchTool, { pattern: '/docs/**/*.md' })).rejects.toThrow('`docs/**/*.md`');
+	});
+
 	it('matches project files and saved files in one pass', async () => {
 		await fs.writeFile(path.join(projectFolder, 'columns.csv'), 'a,b');
 		await run(writeTool, { file_path: '/home/reports/2025/q2.csv', content: 'q2' });

@@ -24,13 +24,15 @@ import {
 import { createTool } from '../../utils/tools';
 
 export default createTool<searchFiles.Input, searchFiles.Output>({
-	description: 'Search for files matching a glob pattern within the project.',
+	description: 'Search for files matching a relative glob pattern within the project. Omit the leading slash.',
 	inputSchema: searchFiles.InputSchema,
 	outputSchema: searchFiles.OutputSchema,
 	execute: async ({ pattern }, context) => {
 		// Sanitize pattern to prevent escaping the tree
 		if (path.isAbsolute(pattern)) {
-			throw new Error(`Access denied: absolute paths are not allowed in file patterns`);
+			throw new Error(
+				'Access denied: absolute paths are not allowed in file patterns. Remove the leading slash or drive and use a relative glob such as `docs/**/*.md`.',
+			);
 		}
 		if (pattern.includes('..')) {
 			throw new Error(`Access denied: '..' is not allowed in file patterns`);
