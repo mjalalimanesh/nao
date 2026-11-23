@@ -1192,6 +1192,19 @@ code.dollar:before {
 	direction: ltr;
 }
 
+.assistant-markdown .katex-display {
+	direction: ltr;
+	max-width: 100%;
+	overflow-x: auto;
+	overflow-y: hidden;
+	padding-block: 0.25em;
+}
+
+.assistant-markdown .katex-display > .katex {
+	width: max-content;
+	min-width: 100%;
+}
+
 /*
  * Custom story theme. Most slots land through the existing tokens that
  * StoryThemeProvider overrides on its wrapper; these rules cover the slots
