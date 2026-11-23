@@ -1,3 +1,4 @@
+import { LOCAL_DATABASE_ID } from '@nao/shared/tools';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../src/services/license.service', () => ({
@@ -15,15 +16,13 @@ vi.mock('../../src/queries/project.queries', () => ({
 vi.mock('../../src/agents/tools/query-app-db', () => ({
 	queryAppDb: vi.fn(),
 }));
-vi.mock('../../src/services/local-query.service', () => ({
-	runQueryOnLocalFiles: vi.fn(),
-}));
-
 import executeSqlTool, { executeQuery } from '../../src/agents/tools/execute-sql';
 import { getExecuteSqlPartByQueryIdInChat, updateExecuteSqlPart } from '../../src/queries/execute-sql.queries';
 import { hasFeature, LICENSE_FEATURES } from '../../src/services/license.service';
+import { readUserFileBytes } from '../../src/services/storage/user-files';
 import type { WarehouseTableAccess } from '../../src/services/user-group-context-access.service';
 import type { ToolContext } from '../../src/types/tools';
+import { userScope, useStorageBackend, useTemporaryLocalStorage } from '../helpers/storage-backend';
 import { createToolContext, executeTool } from '../helpers/tool-context';
 
 beforeEach(() => {
@@ -32,6 +31,98 @@ beforeEach(() => {
 
 afterEach(() => {
 	vi.unstubAllGlobals();
+});
+
+describe('editing local SQL exports', () => {
+	useTemporaryLocalStorage();
+
+	it('updates the same-turn export and inherits an explicitly changed destination on the next edit', async () => {
+		const context = createToolContext(userScope);
+		const original = await executeTool(
+			executeSqlTool,
+			{
+				database_id: LOCAL_DATABASE_ID,
+				sql_query: 'SELECT 1 AS n',
+				save_to: { path: '/home/exports/totals.csv', format: 'csv' },
+			},
+			context,
+		);
+		await expect(readCsv('totals.csv')).resolves.toBe('n\n1\n');
+
+		await executeTool(
+			executeSqlTool,
+			{ database_id: LOCAL_DATABASE_ID, query_id: original.id, sql_query: 'SELECT 2 AS n' },
+			context,
+		);
+		await expect(readCsv('totals.csv')).resolves.toBe('n\n2\n');
+
+		await executeTool(
+			executeSqlTool,
+			{
+				query_id: original.id,
+				sql_query: 'SELECT 3 AS n',
+				save_to: { path: '/home/exports/revised.csv', format: 'csv' },
+			},
+			context,
+		);
+		await expect(readCsv('revised.csv')).resolves.toBe('n\n3\n');
+		await executeTool(executeSqlTool, { query_id: original.id, sql_query: 'SELECT 4 AS n' }, context);
+		await expect(readCsv('revised.csv')).resolves.toBe('n\n4\n');
+		await expect(readCsv('totals.csv')).resolves.toBe('n\n2\n');
+	}, 15_000);
+
+	it('recovers a persisted export destination from the result', async () => {
+		mockPersistedExport();
+
+		const query = await executeTool(
+			executeSqlTool,
+			{ query_id: 'query_12345678', sql_query: 'SELECT 2 AS n' },
+			createToolContext(userScope),
+		);
+
+		const destination = { path: '/home/exports/totals.parquet', format: 'parquet' };
+		expect(query.saved_file?.path).toBe(destination.path);
+		expect(updateExecuteSqlPart).toHaveBeenCalledWith(
+			'saved-call',
+			expect.objectContaining({ save_to: destination }),
+			query,
+		);
+	});
+
+	it('checks storage restrictions for a destination inherited from the persisted result', async () => {
+		mockPersistedExport();
+		useStorageBackend('none');
+
+		await expect(
+			executeTool(
+				executeSqlTool,
+				{ query_id: 'query_12345678', sql_query: 'SELECT 2 AS n' },
+				createToolContext(userScope),
+			),
+		).rejects.toThrow(/storage is disabled/i);
+		expect(updateExecuteSqlPart).not.toHaveBeenCalled();
+	});
+
+	async function readCsv(name: string) {
+		return (await readUserFileBytes(userScope, `exports/${name}`)).toString();
+	}
+
+	function mockPersistedExport() {
+		vi.mocked(getExecuteSqlPartByQueryIdInChat).mockResolvedValueOnce({
+			toolCallId: 'saved-call',
+			toolName: 'execute_sql',
+			toolInput: { sql_query: 'SELECT 1 AS n', database_id: LOCAL_DATABASE_ID },
+			toolOutput: {
+				id: 'query_12345678',
+				data: [{ n: 1 }],
+				row_count: 1,
+				columns: ['n'],
+				dialect: 'duckdb',
+				saved_file: { path: '/home/exports/totals.parquet', size: 12 },
+			},
+			adminMode: false,
+		});
+	}
 });
 
 describe('execute_sql excluded-column enforcement', () => {

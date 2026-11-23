@@ -1,3 +1,4 @@
+import { fileExtension } from '@nao/shared/attachments';
 import { sqlIncludesFilterTemplate, stripSqlFilterBlocks, validateSqlFilterTemplate } from '@nao/shared/sql-template';
 import type { executeSql } from '@nao/shared/tools';
 import { executeSql as schemas, LOCAL_DATABASE_ID } from '@nao/shared/tools';
@@ -125,7 +126,7 @@ async function executeLocalQuery(
 		savedFile,
 	} = await runQueryOnLocalFiles(effectiveSql, context, saveTo);
 	const id = queryId ?? (`query_${crypto.randomUUID().slice(0, 8)}` as const);
-	context.queryResults.set(id, { columns, data, sqlQuery, databaseId: LOCAL_DATABASE_ID });
+	context.queryResults.set(id, { columns, data, sqlQuery, databaseId: LOCAL_DATABASE_ID, saveTo });
 	const appliedLimit = detectQueryRowLimit(effectiveSql);
 
 	return {
@@ -178,10 +179,11 @@ async function updateExistingQuery(
 		throw semanticQueryNotEditableError(input.query_id);
 	}
 
-	const saveTo = input.save_to ?? existing.toolInput.save_to;
+	const savedPath = existing.toolOutput.saved_file?.path;
+	const saveTo = input.save_to ?? existing.toolInput.save_to ?? getSavedDestination(savedPath);
 	const nextInput: executeSql.Input = {
 		sql_query: input.sql_query,
-		database_id: input.database_id ?? existing.toolInput.database_id,
+		database_id: input.database_id ?? existing.toolInput.database_id ?? (savedPath ? LOCAL_DATABASE_ID : undefined),
 		name: input.name ?? existing.toolInput.name,
 		...(saveTo && { save_to: saveTo }),
 	};
@@ -209,7 +211,23 @@ async function updateSameTurnQuery(
 	if (sameTurnResult.semanticQuery) {
 		throw semanticQueryNotEditableError(input.query_id);
 	}
-	return executeQuery(input, context);
+	return executeQuery(
+		{
+			...input,
+			database_id: input.database_id ?? sameTurnResult.databaseId,
+			save_to: input.save_to ?? sameTurnResult.saveTo,
+		},
+		context,
+	);
+}
+
+function getSavedDestination(path: string | undefined): executeSql.SaveTo | undefined {
+	if (!path) {
+		return undefined;
+	}
+	const extension = fileExtension(path);
+	const format = schemas.SAVE_FORMATS.find((format) => format === extension);
+	return format ? { path, format } : undefined;
 }
 
 function semanticQueryNotEditableError(queryId: string): Error {

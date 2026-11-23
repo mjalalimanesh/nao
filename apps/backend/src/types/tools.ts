@@ -1,6 +1,6 @@
 import type { McpAccess, UserGroupFeature, WarehouseColumnSecurity, WarehouseRowSecurity } from '@nao/shared';
 import type { UserRulesGroupAccess } from '@nao/shared/rules-template';
-import type { displayChart, displayMap, executeSemanticQuery } from '@nao/shared/tools';
+import type { displayChart, displayMap, executeSemanticQuery, executeSql } from '@nao/shared/tools';
 import type { LlmSelectedModel, SemanticLayerMode, StoryFormat } from '@nao/shared/types';
 
 import type { WarehouseTableAccess } from '../services/context-access';
@@ -21,6 +21,7 @@ export interface QueryResult {
 	/** The SQL as the model wrote it (filter templates included), set for results produced in the current run. */
 	sqlQuery?: string;
 	databaseId?: string;
+	saveTo?: executeSql.SaveTo;
 }
 
 export interface GeneratedArtifacts {
