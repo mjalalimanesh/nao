@@ -208,9 +208,16 @@ export const getChat = async (
 		})
 		.from(s.chat)
 		.innerJoin(s.chatMessage, eq(s.chatMessage.chatId, s.chat.id))
-		.where(and(eq(s.chatMessage.chatId, chatId), isNull(s.chatMessage.supersededAt), isNull(s.chat.deletedAt)))
-		.innerJoin(s.messagePart, eq(s.messagePart.messageId, s.chatMessage.id))
+		.leftJoin(s.messagePart, eq(s.messagePart.messageId, s.chatMessage.id))
 		.leftJoin(s.messageFeedback, eq(s.messageFeedback.messageId, s.chatMessage.id))
+		.where(
+			and(
+				eq(s.chatMessage.chatId, chatId),
+				isNull(s.chatMessage.supersededAt),
+				isNull(s.chat.deletedAt),
+				hasVisibleMessage(),
+			),
+		)
 		.orderBy(asc(s.chatMessage.createdAt), asc(s.messagePart.order))
 		.execute();
 
@@ -220,7 +227,7 @@ export const getChat = async (
 	}
 
 	const result = opts.includeFeedback ? rows : rows.map(({ message_feedback: _, ...row }) => row);
-	const messages = aggregateChatMessagParts(result);
+	const messages = aggregateChatMessageParts(result);
 	const versionInfoMap = await buildVersionInfoMap(chatId);
 	const messagesWithVersions = messages.map((message) =>
 		versionInfoMap.has(message.id) ? { ...message, versionInfo: versionInfoMap.get(message.id) } : message,
@@ -302,44 +309,58 @@ const selectMessagePartColumns = (opts: { queryResultPreviews?: boolean }) => {
 	};
 };
 
+function hasVisibleMessage() {
+	return or(
+		isNotNull(s.messagePart.id),
+		and(eq(s.chatMessage.role, 'assistant'), isNotNull(s.chatMessage.errorMessage)),
+	);
+}
+
 /** Aggregate the message parts into a list of UI messages. */
-const aggregateChatMessagParts = (
+const aggregateChatMessageParts = (
 	result: {
 		chat_message: DBChatMessage;
-		message_part: DBMessagePart;
+		message_part: DBMessagePart | null;
 		message_feedback?: MessageFeedback | null;
 	}[],
 ): UIMessage[] => {
-	const messagesMap = result.reduce(
-		(acc, row) => {
-			const uiPart = convertDBPartToUIPart(row.message_part);
-			if (!uiPart) {
-				return acc;
-			}
-
-			if (acc[row.chat_message.id]) {
-				acc[row.chat_message.id].parts.push(uiPart);
-			} else {
-				acc[row.chat_message.id] = {
-					id: row.chat_message.id,
-					role: row.chat_message.role,
-					parts: [uiPart],
-					feedback: row.message_feedback ?? undefined,
-					source: row.chat_message.source ?? undefined,
-					isForked: row.chat_message.isForked ?? undefined,
-					citations: row.chat_message.citations ?? undefined,
-					stopReason: row.chat_message.stopReason ?? undefined,
-					llmProvider: row.chat_message.llmProvider ?? undefined,
-					createdAt: row.chat_message.createdAt?.getTime(),
-				};
-			}
-			return acc;
-		},
-		{} as Record<string, UIMessage>,
-	);
-
-	return Object.values(messagesMap);
+	const messages = new Map<string, UIMessage>();
+	for (const { chat_message: row, message_part: part, message_feedback: feedback } of result) {
+		const uiPart = part ? convertDBPartToUIPart(part) : undefined;
+		const errorMessage = row.role === 'assistant' ? formatStoredChatError(row.errorMessage) : null;
+		if (!uiPart && !errorMessage) {
+			continue;
+		}
+		let message = messages.get(row.id);
+		if (!message) {
+			message = {
+				id: row.id,
+				role: row.role,
+				parts: [],
+				feedback: feedback ?? undefined,
+				source: row.source ?? undefined,
+				isForked: row.isForked ?? undefined,
+				citations: row.citations ?? undefined,
+				stopReason: row.stopReason ?? undefined,
+				...(errorMessage && { errorMessage }),
+				llmProvider: row.llmProvider ?? undefined,
+				createdAt: row.createdAt?.getTime(),
+			};
+			messages.set(row.id, message);
+		}
+		if (uiPart) {
+			message.parts.push(uiPart);
+		}
+	}
+	return [...messages.values()];
 };
+
+function formatStoredChatError(message: string | null): string | null {
+	if (message && /^Type validation failed[^\n]*: Value: /.test(message)) {
+		return 'The model provider returned an error. Please retry.';
+	}
+	return message;
+}
 
 export const getChatMessages = async (
 	chatId: string,
@@ -348,12 +369,12 @@ export const getChatMessages = async (
 	const result = await db
 		.select({ chat_message: s.chatMessage, message_part: selectMessagePartColumns(opts) })
 		.from(s.chatMessage)
-		.where(and(eq(s.chatMessage.chatId, chatId), isNull(s.chatMessage.supersededAt)))
-		.innerJoin(s.messagePart, eq(s.messagePart.messageId, s.chatMessage.id))
+		.leftJoin(s.messagePart, eq(s.messagePart.messageId, s.chatMessage.id))
+		.where(and(eq(s.chatMessage.chatId, chatId), isNull(s.chatMessage.supersededAt), hasVisibleMessage()))
 		.orderBy(asc(s.chatMessage.createdAt), asc(s.messagePart.order))
 		.execute();
 
-	return aggregateChatMessagParts(result);
+	return aggregateChatMessageParts(result);
 };
 
 export const deleteLastEmptyTurn = async (

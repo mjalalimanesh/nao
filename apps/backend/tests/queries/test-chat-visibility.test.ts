@@ -1,10 +1,18 @@
 import '../../src/env';
 
+import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import s from '../../src/db/abstractSchema';
 import { db } from '../../src/db/db';
-import { listGroupedChats, searchUserChats } from '../../src/queries/chat.queries';
+import {
+	getChat,
+	getChatMessages,
+	listGroupedChats,
+	searchUserChats,
+	upsertMessage,
+} from '../../src/queries/chat.queries';
+import type { UIMessage } from '../../src/types/chat';
 
 vi.mock('../../src/db/db', async () => {
 	const { createInMemoryDbWithInlineTransactions } = await import('../helpers/in-memory-db');
@@ -39,6 +47,60 @@ describe('test chats visibility', () => {
 		const results = await searchUserChats(USER_ID, 'Revenue');
 
 		expect(results.map((chat) => chat.id)).toEqual([OWN_CHAT_ID]);
+	});
+
+	it('returns saved assistant errors and their available parts in both history reads', async () => {
+		const chatId = 'saved-error-chat';
+		await db.insert(s.chat).values({ id: chatId, userId: USER_ID, projectId: PROJECT_ID });
+		const fixtures = [
+			{ id: 'question', role: 'user', parts: [{ type: 'text', text: 'Show revenue.' }] },
+			{ id: 'failed', role: 'assistant', parts: [], stopReason: 'error', error: 'The model provider failed.' },
+			{ id: 'empty', role: 'assistant', parts: [] },
+			{
+				id: 'success',
+				role: 'assistant',
+				parts: [
+					{ type: 'text', text: 'First part.' },
+					{ type: 'text', text: 'Second part.' },
+				],
+			},
+			{
+				id: 'partial',
+				role: 'assistant',
+				parts: [{ type: 'text', text: 'Partial answer.' }],
+				stopReason: 'error',
+				error: 'The model provider disconnected.',
+			},
+			{
+				id: 'validation-failure',
+				role: 'assistant',
+				parts: [],
+				error: 'Type validation failed: Value: {"providerResponse":"details"}.\nError message: invalid',
+				expectedError: 'The model provider returned an error. Please retry.',
+			},
+		] satisfies (UIMessage & { error?: string; expectedError?: string })[];
+		for (const [index, { expectedError: _, ...message }] of fixtures.entries()) {
+			await upsertMessage({ chatId, ...message });
+			await db
+				.update(s.chatMessage)
+				.set({ createdAt: new Date(index * 1000) })
+				.where(eq(s.chatMessage.id, message.id));
+		}
+
+		const [chat] = await getChat(chatId, { includeFeedback: true, queryResultPreviews: true });
+		const messages = await getChatMessages(chatId);
+		for (const history of [chat?.messages, messages]) {
+			expect(history?.map(({ id, role, parts, errorMessage }) => ({ id, role, parts, errorMessage }))).toEqual(
+				fixtures
+					.filter(({ id }) => id !== 'empty')
+					.map(({ id, role, parts, error, expectedError }) => ({
+						id,
+						role,
+						parts: parts.map((part) => expect.objectContaining(part)),
+						errorMessage: expectedError ?? error,
+					})),
+			);
+		}
 	});
 });
 

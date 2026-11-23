@@ -2,6 +2,7 @@ import { AlertCircleIcon, CheckIcon, CopyIcon, CreditCardIcon, RotateCcwIcon } f
 import { Button } from '../ui/button';
 import { Callout } from '../ui/callout';
 import type { UIMessage } from '@nao/backend/chat';
+import type { ReactNode } from 'react';
 import { useAgentContext, useAgentMessagesSelector } from '@/contexts/agent.provider';
 import { useCloudBillingAccess } from '@/hooks/use-cloud-billing-access';
 import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard';
@@ -26,14 +27,14 @@ type ParsedError = {
 	requestId?: string;
 };
 
-function parseError(error: Error): ParsedError {
+function parseError(message: string): ParsedError {
 	try {
-		const parsed = JSON.parse(error.message);
+		const parsed = JSON.parse(message);
 		const nested = parsed?.error;
 		if (nested && typeof nested === 'object') {
 			return {
 				error: asString(nested.code) ?? asString(nested.type),
-				message: asString(nested.message) ?? asString(parsed.message) ?? error.message,
+				message: asString(nested.message) ?? asString(parsed.message) ?? message,
 				requestId: asString(nested.requestId),
 			};
 		}
@@ -42,7 +43,7 @@ function parseError(error: Error): ParsedError {
 			message: asString(parsed?.message),
 		};
 	} catch {
-		return { message: error.message };
+		return { message };
 	}
 }
 
@@ -53,9 +54,8 @@ function asString(value: unknown): string | undefined {
 export function ChatError({ className }: Props) {
 	const { error, isRunning, resendMessage, clearError } = useAgentContext();
 	const lastUserMessageId = useAgentMessagesSelector(findLastUserMessageId);
-	const { isCopied, copy } = useCopyToClipboard();
 	const openOrganizationBilling = useOpenOrganizationBilling();
-	const parsed = error ? parseError(error) : null;
+	const parsed = error ? parseError(error.message) : {};
 	const isBillingAccessError = isCloudBillingAccessError(parsed);
 	const billingAccess = useCloudBillingAccess({ enabled: isBillingAccessError });
 
@@ -69,7 +69,6 @@ export function ChatError({ className }: Props) {
 		return null;
 	}
 
-	const requestId = parsed?.requestId;
 	const retry = async () => {
 		if (!lastUserMessageId) {
 			return;
@@ -97,12 +96,47 @@ export function ChatError({ className }: Props) {
 	}
 
 	return (
+		<ChatErrorDetails details={parsed} className={className}>
+			{lastUserMessageId && (
+				<Button
+					variant='outline'
+					size='sm'
+					className='mt-2'
+					disabled={isRunning}
+					onClick={() => {
+						void retry();
+					}}
+				>
+					<RotateCcwIcon />
+					Retry
+				</Button>
+			)}
+		</ChatErrorDetails>
+	);
+}
+
+export function SavedChatError({ message }: { message: string }) {
+	return <ChatErrorDetails details={parseError(message)} />;
+}
+
+function ChatErrorDetails({
+	details: { error, message, requestId },
+	className,
+	children,
+}: {
+	details: ParsedError;
+	className?: string;
+	children?: ReactNode;
+}) {
+	const { isCopied, copy } = useCopyToClipboard();
+
+	return (
 		<div className={cn('flex items-start gap-2.5 px-4 py-3 text-red-500', className)}>
 			<AlertCircleIcon className='size-4 shrink-0 mt-0.5' />
 
 			<div className='flex flex-1 min-w-0 flex-col items-start gap-1 text-sm wrap-break-word'>
-				{parsed?.error && <span className='font-medium'>{parsed.error}</span>}
-				{parsed?.message && <p className='text-red-400 leading-relaxed'>{parsed.message}</p>}
+				{error && <span className='font-medium'>{error}</span>}
+				{message && <p className='text-red-400 leading-relaxed'>{message}</p>}
 				{requestId && (
 					<div className='mt-2 flex items-center gap-1 text-xs text-muted-foreground'>
 						<span>Provider request ID:</span>
@@ -121,20 +155,7 @@ export function ChatError({ className }: Props) {
 						</Button>
 					</div>
 				)}
-				{lastUserMessageId && (
-					<Button
-						variant='outline'
-						size='sm'
-						className='mt-2'
-						disabled={isRunning}
-						onClick={() => {
-							void retry();
-						}}
-					>
-						<RotateCcwIcon />
-						Retry
-					</Button>
-				)}
+				{children}
 			</div>
 		</div>
 	);

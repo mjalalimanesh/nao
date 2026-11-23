@@ -20,6 +20,7 @@ import { StoryQueryGroup } from '@/components/tool-calls/story-query-group';
 import { ToolCall } from '@/components/tool-calls';
 import { AssistantReasoning } from '@/components/chat-messages/assistant-reasoning';
 import { AssistantCompaction } from '@/components/chat-messages/assistant-compaction';
+import { SavedChatError } from '@/components/chat-messages/chat-error';
 import { AssistantTextWithCitation } from '@/components/chat-messages/citation-text';
 import { TextShimmer } from '@/components/ui/text-shimmer';
 import { AssistantMessageActions } from '@/components/chat-messages/assistant-message-actions';
@@ -56,8 +57,9 @@ export const AssistantMessage = memo(
 		const isCompacting = message.parts.at(-1)?.type === 'data-compactionSummaryStarted';
 		const showActions = message.id !== storyIntroMessageId;
 		const hasFeedback = message.feedback != null;
+		const savedError = message.errorMessage;
 
-		if (!message.parts.length && isSettled) {
+		if (!message.parts.length && !savedError && isSettled) {
 			return null;
 		}
 
@@ -70,13 +72,15 @@ export const AssistantMessage = memo(
 				<div className={cn('group px-3 flex flex-col gap-2 bg-transparent')}>
 					<MessageParts parts={messageParts} />
 
-					{isSettled && !hasContent && !(isLastMessage && error) && (
+					{savedError && !(isLastMessage && error) && <SavedChatError message={savedError} />}
+
+					{isSettled && !hasContent && !savedError && !(isLastMessage && error) && (
 						<div className='text-muted-foreground italic text-sm'>No response</div>
 					)}
 
 					{isCompacting ? <AssistantCompaction /> : !isSettled && <TextShimmer showLogo />}
 
-					{chatId && showActions && !(isLastMessage && isRunning) && (
+					{chatId && showActions && (!savedError || hasContent) && !(isLastMessage && isRunning) && (
 						<AssistantMessageActions
 							message={message}
 							chatId={chatId}

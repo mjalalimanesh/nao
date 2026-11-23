@@ -692,6 +692,7 @@ export class AgentManager {
 		} = {},
 	): ReadableStream<InferUIMessageChunk<UIMessage>> {
 		let error: unknown = undefined;
+		let errorMessage: string | undefined;
 		let result: StreamTextResult<AgentTools, OutputInterface> | undefined;
 		const assistantMessageId = crypto.randomUUID();
 		this._usageContext.messageId = assistantMessageId;
@@ -702,7 +703,8 @@ export class AgentManager {
 				projectId: this.chat.projectId,
 				context: { chatId: this.chat.id, modelId: this._modelSelection.modelId },
 			});
-			return formatErrorMessageForUI(err);
+			errorMessage = formatErrorMessageForUI(err);
+			return errorMessage;
 		};
 
 		return createUIMessageStream<UIMessage>({
@@ -770,7 +772,7 @@ export class AgentManager {
 						senderUserId: this.chat.userId,
 						source: this._profile.source,
 						stopReason,
-						error,
+						error: errorMessage,
 						tokenUsage,
 						llmProvider: this._modelSelection.provider,
 						llmModelId: this._modelSelection.modelId,
